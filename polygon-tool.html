@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Инструмент сбора координат кабинетов</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    h1 {
+      text-align: center;
+      color: #2c3e50;
+    }
+    .instructions {
+      background: #fff;
+      padding: 16px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    #image-container {
+      position: relative;
+      display: inline-block;
+      border: 2px dashed #ccc;
+      background: #eee;
+      margin-bottom: 20px;
+    }
+    #floor-image {
+      display: block;
+      max-width: 100%;
+    }
+    .point {
+      position: absolute;
+      width: 12px;
+      height: 12px;
+      background: red;
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 10;
+    }
+    .point::after {
+      content: attr(data-index);
+      position: absolute;
+      top: -20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: yellow;
+      color: black;
+      font-size: 12px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      white-space: nowrap;
+    }
+    #output {
+      width: 100%;
+      height: 120px;
+      font-family: monospace;
+      padding: 12px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      background: #fff;
+    }
+    button {
+      margin: 5px;
+      padding: 8px 16px;
+      background: #007bff;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    button:hover { background: #0056b3; }
+    button.active {
+      background: #28a745;
+      font-weight: bold;
+    }
+    .controls {
+      margin: 10px 0;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .mode-toggle {
+      display: flex;
+      gap: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Инструмент сбора координат кабинетов</h1>
+
+    <div class="instructions">
+      <p><strong>Как пользоваться:</strong></p>
+      <ul>
+        <li>Загрузите схему этажа.</li>
+        <li>Выберите режим:
+          <strong>«Прямоугольник»</strong> — 2 клика (углы),
+          <strong>«Полигон»</strong> — кликайте по всем углам.</li>
+        <li>Нажмите <kbd>Z</kbd> — отменить последнюю точку, <kbd>C</kbd> — очистить.</li>
+        <li>Готовый JSON — внизу. Копируйте и вставляйте в `floors_routes.json`.</li>
+      </ul>
+    </div>
+
+    <input type="file" id="image-input" accept="image/*" />
+    
+    <div class="controls">
+      <div class="mode-toggle">
+        <button id="mode-rect" class="active" onclick="setMode('rect')">Прямоугольник</button>
+        <button id="mode-poly" onclick="setMode('poly')">Полигон</button>
+      </div>
+      <button onclick="clearPoints()">Очистить всё</button>
+      <button onclick="copyToClipboard()">Копировать JSON</button>
+    </div>
+
+    <div id="image-container">
+      <img id="floor-image" style="display: none;" />
+    </div>
+
+    <textarea id="output" readonly placeholder="Здесь появится JSON-массив координат..."></textarea>
+  </div>
+
+  <script>
+    let points = [];
+    let mode = 'rect'; // 'rect' или 'poly'
+    const imageContainer = document.getElementById('image-container');
+    const floorImage = document.getElementById('floor-image');
+    const output = document.getElementById('output');
+    const imageInput = document.getElementById('image-input');
+
+    function setMode(newMode) {
+      mode = newMode;
+      document.getElementById('mode-rect').classList.toggle('active', mode === 'rect');
+      document.getElementById('mode-poly').classList.toggle('active', mode === 'poly');
+      clearPoints();
+    }
+
+    imageInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const url = URL.createObjectURL(file);
+      floorImage.src = url;
+      floorImage.onload = () => {
+        floorImage.style.display = 'block';
+        clearPoints();
+      };
+    });
+
+    floorImage.addEventListener('click', (e) => {
+      if (floorImage.style.display === 'none') return;
+
+      const rect = floorImage.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      if (x < 0 || x > floorImage.width || y < 0 || y > floorImage.height) return;
+
+      const pt = [Math.round(x), Math.round(y)];
+
+      if (mode === 'rect') {
+        if (points.length === 0) {
+          // Первый клик — запоминаем
+          points = [pt];
+        } else {
+          // Второй клик — строим прямоугольник
+          const [x1, y1] = points[0];
+          const [x2, y2] = pt;
+
+          // Нормализуем координаты (левый-верхний, правый-нижний)
+          const left = Math.min(x1, x2);
+          const top = Math.min(y1, y2);
+          const right = Math.max(x1, x2);
+          const bottom = Math.max(y1, y2);
+
+          // Формируем 4 угла по часовой стрелке
+          points = [
+            [left, top],        // левый верх
+            [right, top],       // правый верх
+            [right, bottom],    // правый низ
+            [left, bottom]      // левый низ
+          ];
+        }
+        drawPoints();
+        updateOutput();
+      } else if (mode === 'poly') {
+        points.push(pt);
+        drawPoints();
+        updateOutput();
+      }
+    });
+
+    function drawPoints() {
+      document.querySelectorAll('.point').forEach(el => el.remove());
+      points.forEach((pt, i) => {
+        const el = document.createElement('div');
+        el.className = 'point';
+        el.style.left = pt[0] + 'px';
+        el.style.top = pt[1] + 'px';
+        el.setAttribute('data-index', i + 1);
+        imageContainer.appendChild(el);
+      });
+    }
+
+    function updateOutput() {
+      output.value = points.length ? JSON.stringify(points, null, 2) : '[]';
+    }
+
+    function clearPoints() {
+      points = [];
+      drawPoints();
+      updateOutput();
+    }
+
+    function copyToClipboard() {
+      output.select();
+      document.execCommand('copy');
+      alert('JSON скопирован!');
+    }
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'z' || e.key === 'Z') {
+        e.preventDefault();
+        if (mode === 'poly' && points.length > 0) {
+          points.pop();
+          drawPoints();
+          updateOutput();
+        } else if (mode === 'rect') {
+          // В режиме прямоугольника — сброс
+          clearPoints();
+        }
+      }
+      if (e.key === 'c' || e.key === 'C') {
+        e.preventDefault();
+        clearPoints();
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <title>Инструмент построения маршрутов</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f9f9f9;
+    }
+    h1 { text-align: center; color: #2c3e50; margin-top: 0; }
+    .controls {
+      display: flex; gap: 10px; flex-wrap: wrap;
+      padding: 12px; background: white; border-radius: 8px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1); margin-bottom: 16px;
+    }
+    input, button {
+      padding: 8px 12px; border: 1px solid #ccc; border-radius: 6px;
+    }
+    button {
+      background: #3498db; color: white; font-weight: bold; cursor: pointer;
+    }
+    button:hover { background: #2980b9; }
+    button.danger { background: #e74c3c; }
+    button.danger:hover { background: #c0392b; }
+    #map {
+      height: 600px; width: 100%;
+      border: 1px solid #ddd; border-radius: 8px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+    }
+    #output {
+      margin-top: 16px; padding: 12px;
+      background: white; border-radius: 8px;
+      font-family: monospace; white-space: pre-wrap;
+      max-height: 200px; overflow: auto;
+    }
+  </style>
+</head>
+<body>
+  <h1>🧭 Разметка маршрутов по этажам</h1>
+
+  <div class="controls">
+    <select id="floor-select"></select>
+    <button id="btn-load-floor">Загрузить этаж</button>
+    <span style="flex:1"></span>
+    <input type="text" id="room-number" placeholder="№ кабинета (напр. 205)" />
+    <button id="btn-set-hall">Отметить холл</button>
+    <button id="btn-start-route">Начать маршрут</button>
+    <button id="btn-undo" title="Отменить последнюю точку (⌫)">Отменить</button>
+    <button id="btn-finish">Завершить (поставить кабинет)</button>
+    <button id="btn-cancel" class="danger">Отменить текущий</button>
+  </div>
+
+  <div style="display:flex; gap:16px; align-items:flex-start;">
+    <div style="flex:1 1 auto;">
+      <div id="map"></div>
+      <div id="output">Выберите этаж и нажмите "Загрузить этаж". Потом отметьте холл и стройте маршруты.</div>
+    </div>
+    <div style="width:320px; background:white; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,0.1); padding:12px;">
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+        <button id="btn-export">💾 Экспорт JSON</button>
+        <button id="btn-import">📂 Импорт JSON</button>
+        <input type="file" id="file-input" accept="application/json" style="display:none" />
+        <button id="btn-clear-floor" class="danger">Очистить этаж</button>
+        <button id="btn-clear-all" class="danger">Очистить всё</button>
+      </div>
+      <div style="font-weight:bold; margin-bottom:6px;">Кабинеты этажа</div>
+      <div id="room-list" style="max-height:420px; overflow:auto; border:1px solid #eee; border-radius:6px; padding:6px;">
+        <div style="color:#888">Пока нет кабинетов</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // === Состояние приложения (по этажам) ===
+    // Координаты всегда как [y, x] (lat, lng в Leaflet CRS.Simple)
+    const DEFAULT_FLOOR_FILES = ['1.png','2.png','3.png','4.png'];
+
+    const appState = {
+      floors: {
+        // [floorId]: { image:{path,width,height}, hall:[y,x]|null, rooms:{ [room]:{coords:[y,x], route:[[y,x],...] } } }
+      },
+      activeFloor: null
+    };
+
+    // === Инициализация карты (без фонового изображения, загрузим позже) ===
+    const map = L.map('map', {
+      crs: L.CRS.Simple,
+      minZoom: -4,
+      maxZoom: 5
+    });
+
+    let imageOverlay = null;
+    let imageBounds = null;
+
+    // Текущее действие разметки
+    let mode = 'idle'; // idle | setHall | drawing
+    let currentRoomNumber = null;
+    let currentRoutePoints = [];
+    let currentPolyline = null;
+    let tempMarkers = [];
+
+    // === DOM элементы ===
+    const floorSelect = document.getElementById('floor-select');
+    const btnLoadFloor = document.getElementById('btn-load-floor');
+    const btnSetHall = document.getElementById('btn-set-hall');
+    const btnStartRoute = document.getElementById('btn-start-route');
+    const btnUndo = document.getElementById('btn-undo');
+    const btnFinish = document.getElementById('btn-finish');
+    const btnCancel = document.getElementById('btn-cancel');
+    const btnExport = document.getElementById('btn-export');
+    const btnImport = document.getElementById('btn-import');
+    const fileInput = document.getElementById('file-input');
+    const btnClearFloor = document.getElementById('btn-clear-floor');
+    const btnClearAll = document.getElementById('btn-clear-all');
+    const roomInput = document.getElementById('room-number');
+    const roomListEl = document.getElementById('room-list');
+
+    const outputEl = document.getElementById('output');
+
+    // === Утилиты ===
+    function setOutput(msg) { outputEl.textContent = msg; }
+    function pushOutput(msg) { outputEl.textContent += `\n${msg}`; }
+
+    function persist() {
+      try { localStorage.setItem('route_builder_state_v2', JSON.stringify(appState)); } catch(e) {}
+    }
+    function restore() {
+      const raw = localStorage.getItem('route_builder_state_v2');
+      if (!raw) return;
+      try {
+        const data = JSON.parse(raw);
+        if (data && data.floors) Object.assign(appState, data);
+      } catch(e) {}
+    }
+
+    function ensureFloor(floorId, imagePath) {
+      if (!appState.floors[floorId]) {
+        appState.floors[floorId] = { image: { path: imagePath || DEFAULT_FLOOR_FILES[Number(floorId)-1] || imagePath }, hall: null, rooms: {} };
+      } else if (imagePath) {
+        appState.floors[floorId].image.path = imagePath;
+      }
+    }
+
+    function resetDrawingState() {
+      mode = 'idle';
+      currentRoomNumber = null;
+      currentRoutePoints = [];
+      if (currentPolyline) { map.removeLayer(currentPolyline); currentPolyline = null; }
+      tempMarkers.forEach(m => map.removeLayer(m));
+      tempMarkers = [];
+      updateButtons();
+    }
+
+    function updateButtons() {
+      const hasFloor = !!appState.activeFloor && !!appState.floors[appState.activeFloor];
+      btnSetHall.disabled = !hasFloor || mode === 'drawing';
+      btnStartRoute.disabled = !hasFloor || mode === 'setHall' || !roomInput.value.trim();
+      btnUndo.disabled = mode !== 'drawing' || currentRoutePoints.length === 0;
+      btnFinish.disabled = mode !== 'drawing' || currentRoutePoints.length === 0;
+      btnCancel.disabled = mode === 'idle';
+      btnClearFloor.disabled = !hasFloor;
+      btnExport.disabled = Object.keys(appState.floors).length === 0;
+    }
+
+    function renderRoomList() {
+      const floor = appState.floors[appState.activeFloor];
+      roomListEl.innerHTML = '';
+      if (!floor || Object.keys(floor.rooms).length === 0) {
+        const empty = document.createElement('div');
+        empty.style.color = '#888';
+        empty.textContent = 'Пока нет кабинетов';
+        roomListEl.appendChild(empty);
+        return;
+      }
+      Object.entries(floor.rooms).forEach(([room, data]) => {
+        const row = document.createElement('div');
+        row.style.display = 'flex';
+        row.style.alignItems = 'center';
+        row.style.gap = '8px';
+        row.style.padding = '6px';
+        row.style.borderBottom = '1px solid #eee';
+
+        const btnShow = document.createElement('button');
+        btnShow.textContent = '👁';
+        btnShow.title = 'Показать маршрут';
+        btnShow.onclick = () => { showRoomRoute(room); };
+
+        const input = document.createElement('input');
+        input.value = room;
+        input.style.flex = '1';
+        input.onchange = () => {
+          const newNum = input.value.trim();
+          if (!newNum || newNum === room) return;
+          if (floor.rooms[newNum]) { alert('Такой номер уже есть на этаже'); input.value = room; return; }
+          floor.rooms[newNum] = floor.rooms[room];
+          delete floor.rooms[room];
+          persist();
+          renderRoomList();
+        };
+
+        const btnDel = document.createElement('button');
+        btnDel.textContent = '🗑';
+        btnDel.className = 'danger';
+        btnDel.title = 'Удалить кабинет';
+        btnDel.onclick = () => {
+          if (!confirm(`Удалить кабинет ${room}?`)) return;
+          delete floor.rooms[room];
+          persist();
+          redrawAll();
+          renderRoomList();
+        };
+
+        row.appendChild(btnShow);
+        row.appendChild(input);
+        row.appendChild(btnDel);
+        roomListEl.appendChild(row);
+      });
+    }
+
+    function showRoomRoute(room) {
+      const floor = appState.floors[appState.activeFloor];
+      if (!floor || !floor.rooms[room]) return;
+      redrawAll();
+      const route = floor.rooms[room].route;
+      L.polyline(route, { color: 'red', weight: 3 }).addTo(map);
+      const roomCoords = floor.rooms[room].coords;
+      L.marker(roomCoords).bindPopup(`<b>Кабинет ${room}</b>`).addTo(map).openPopup();
+      setOutput(`Показан маршрут для кабинета ${room}`);
+    }
+
+    // === Загрузка этажа (картинки) ===
+    async function loadFloorImage(floorId) {
+      const floor = appState.floors[floorId];
+      if (!floor || !floor.image || !floor.image.path) { alert('Не задан путь к изображению этажа'); return; }
+      const path = floor.image.path;
+      // Загружаем изображение чтобы узнать размеры
+      const img = new Image();
+      const size = await new Promise((resolve, reject) => {
+        img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+        img.onerror = () => reject(new Error('Не удалось загрузить изображение: ' + path));
+        img.src = path;
+      }).catch(e => { alert(e.message); });
+      if (!size) return;
+      floor.image.width = size.width;
+      floor.image.height = size.height;
+
+      // Обновляем подложку
+      const bounds = [[0,0],[size.height, size.width]];
+      imageBounds = bounds;
+      if (imageOverlay) map.removeLayer(imageOverlay);
+      imageOverlay = L.imageOverlay(path, bounds).addTo(map);
+      map.fitBounds(bounds);
+      redrawAll();
+      renderRoomList();
+      setOutput(`Этаж ${floorId} загружен (${size.width}×${size.height}).`);
+      persist();
+    }
+
+    function redrawAll() {
+      // Очистка всех векторных слоёв и временных
+      map.eachLayer(l => {
+        if (l !== imageOverlay) map.removeLayer(l);
+      });
+      tempMarkers = [];
+      currentPolyline = null;
+
+      const floor = appState.floors[appState.activeFloor];
+      if (!floor) return;
+      if (floor.hall) {
+        L.circle(floor.hall, { color: 'green', fillColor: '#0f0', fillOpacity: 0.5, radius: 20 }).addTo(map);
+      }
+      Object.entries(floor.rooms).forEach(([room, data]) => {
+        L.polyline(data.route, { color: 'red', weight: 3 }).addTo(map);
+        L.marker(data.coords).bindPopup(`<b>Кабинет ${room}</b>`).addTo(map);
+      });
+    }
+
+    // === Обработчики режимов ===
+    function enterSetHall() {
+      if (!appState.activeFloor) { alert('Сначала выберите и загрузите этаж'); return; }
+      if (mode === 'drawing') { if (!confirm('Отменить текущий маршрут?')) return; resetDrawingState(); }
+      mode = 'setHall';
+      setOutput('Кликните на карте, чтобы поставить ХОЛЛ.');
+      updateButtons();
+    }
+
+    function enterDrawing() {
+      if (!appState.activeFloor) { alert('Сначала выберите и загрузите этаж'); return; }
+      const room = roomInput.value.trim();
+      if (!room) { alert('Введите номер кабинета'); return; }
+      const floor = appState.floors[appState.activeFloor];
+      if (!floor.hall) { alert('Сначала отметьте холл'); return; }
+      if (floor.rooms[room]) { if (!confirm('Кабинет уже существует. Переписать маршрут?')) return; }
+      resetDrawingState();
+      mode = 'drawing';
+      currentRoomNumber = room;
+      currentRoutePoints = [floor.hall];
+      tempMarkers.push(L.circle(floor.hall, { color: 'green', fillColor: '#0f0', fillOpacity: 0.5, radius: 20 }).addTo(map));
+      currentPolyline = L.polyline(currentRoutePoints, { color: 'blue', weight: 2, dashArray: '5,5' }).addTo(map);
+      setOutput(`Режим построения: кабинет ${room}. Кликайте по коридорам, ⌫ — отмена точки, Завершить — поставить кабинет.`);
+      updateButtons();
+    }
+
+    function addPointAt(latlng) {
+      if (mode !== 'drawing') return;
+      const point = [Math.round(latlng.lat), Math.round(latlng.lng)];
+      currentRoutePoints.push(point);
+      tempMarkers.push(L.circle(point, { color: 'blue', fillColor: '#3498db', fillOpacity: 0.3, radius: 10 }).addTo(map));
+      if (currentPolyline) map.removeLayer(currentPolyline);
+      currentPolyline = L.polyline(currentRoutePoints, { color: 'blue', weight: 2, dashArray: '5,5' }).addTo(map);
+      pushOutput(`Добавлена точка: [${point[0]}, ${point[1]}]`);
+      updateButtons();
+    }
+
+    function undoPoint() {
+      if (mode !== 'drawing' || currentRoutePoints.length === 0) return;
+      currentRoutePoints.pop();
+      const marker = tempMarkers.pop();
+      if (marker) map.removeLayer(marker);
+      if (currentPolyline) map.removeLayer(currentPolyline);
+      if (currentRoutePoints.length > 0) {
+        currentPolyline = L.polyline(currentRoutePoints, { color: 'blue', weight: 2, dashArray: '5,5' }).addTo(map);
+      } else {
+        currentPolyline = null;
+      }
+      updateButtons();
+    }
+
+    function finishRouteAt(latlng) {
+      if (mode !== 'drawing' || currentRoutePoints.length < 1) { alert('Добавьте точки маршрута'); return; }
+      const roomCoords = [Math.round(latlng.lat), Math.round(latlng.lng)];
+      currentRoutePoints.push(roomCoords);
+      const floor = appState.floors[appState.activeFloor];
+      floor.rooms[currentRoomNumber] = { coords: roomCoords, route: [...currentRoutePoints] };
+      persist();
+      redrawAll();
+      setOutput(`✅ Маршрут для ${currentRoomNumber} завершён.`);
+      resetDrawingState();
+      renderRoomList();
+    }
+
+    function cancelCurrent() {
+      if (mode === 'idle') return;
+      if (!confirm('Отменить текущую разметку?')) return;
+      resetDrawingState();
+      setOutput('Текущая разметка отменена.');
+    }
+
+    // === Слушатели карты ===
+    map.on('click', (e) => {
+      if (!appState.activeFloor) return;
+      if (mode === 'setHall') {
+        const p = [Math.round(e.latlng.lat), Math.round(e.latlng.lng)];
+        appState.floors[appState.activeFloor].hall = p;
+        persist();
+        redrawAll();
+        setOutput(`Холл отмечен: [${p[0]}, ${p[1]}]`);
+        mode = 'idle';
+        updateButtons();
+        return;
+      }
+      if (mode === 'drawing') {
+        addPointAt(e.latlng);
+      }
+    });
+
+    map.on('contextmenu', (e) => {
+      // ПКМ — быстрая отмена последней точки в режиме построения
+      if (mode === 'drawing') { e.originalEvent.preventDefault(); undoPoint(); }
+    });
+
+    // Завершение маршрута — следующая точка станет кабинетом
+    let finishArmed = false;
+    btnFinish.addEventListener('click', () => {
+      if (mode !== 'drawing') return;
+      finishArmed = true;
+      setOutput('Кликните по кабинету, чтобы завершить маршрут.');
+    });
+    map.on('click', (e) => {
+      if (finishArmed && mode === 'drawing') {
+        finishArmed = false;
+        finishRouteAt(e.latlng);
+      }
+    });
+
+    // === Управление этажами ===
+    function populateFloorSelect() {
+      floorSelect.innerHTML = '';
+      for (let i=1;i<=DEFAULT_FLOOR_FILES.length;i++) {
+        const opt = document.createElement('option');
+        opt.value = String(i);
+        opt.textContent = `Этаж ${i} (${DEFAULT_FLOOR_FILES[i-1]})`;
+        floorSelect.appendChild(opt);
+      }
+      if (!appState.activeFloor) appState.activeFloor = '1';
+      floorSelect.value = appState.activeFloor;
+    }
+
+    btnLoadFloor.addEventListener('click', async () => {
+      const nextFloor = floorSelect.value;
+      if (mode !== 'idle') {
+        const ok = confirm('Вы в процессе разметки. Переключить этаж и отменить текущую?');
+        if (!ok) return;
+        resetDrawingState();
+      }
+      appState.activeFloor = nextFloor;
+      ensureFloor(nextFloor, DEFAULT_FLOOR_FILES[Number(nextFloor)-1]);
+      await loadFloorImage(nextFloor);
+    });
+
+    // Быстрые действия
+    btnSetHall.addEventListener('click', enterSetHall);
+    btnStartRoute.addEventListener('click', enterDrawing);
+    btnUndo.addEventListener('click', undoPoint);
+    btnCancel.addEventListener('click', cancelCurrent);
+
+    // Очистки
+    btnClearFloor.addEventListener('click', () => {
+      if (!appState.activeFloor) return;
+      if (!confirm('Очистить текущий этаж? Холл и все кабинеты будут удалены.')) return;
+      const f = appState.floors[appState.activeFloor];
+      if (f) { f.hall = null; f.rooms = {}; }
+      resetDrawingState();
+      redrawAll();
+      renderRoomList();
+      persist();
+      setOutput('Этаж очищен.');
+    });
+    btnClearAll.addEventListener('click', () => {
+      if (!confirm('Удалить все этажи и разметку?')) return;
+      appState.floors = {};
+      appState.activeFloor = '1';
+      resetDrawingState();
+      redrawAll();
+      renderRoomList();
+      persist();
+      setOutput('Всё очищено.');
+    });
+
+    // Экспорт / Импорт
+    btnExport.addEventListener('click', () => {
+      const data = { floors: appState.floors };
+      const jsonStr = JSON.stringify(data, null, 2);
+      outputEl.textContent = jsonStr;
+      const blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'floors_routes.json';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    });
+    btnImport.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', async (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      const text = await file.text();
+      try {
+        const data = JSON.parse(text);
+        if (!data.floors) throw new Error('Неверный формат файла');
+        appState.floors = data.floors;
+        appState.activeFloor = Object.keys(appState.floors)[0] || '1';
+        persist();
+        populateFloorSelect();
+        ensureFloor(appState.activeFloor);
+        await loadFloorImage(appState.activeFloor);
+        setOutput('Данные импортированы.');
+      } catch(err) {
+        alert('Ошибка импорта: ' + err.message);
+      } finally {
+        fileInput.value = '';
+      }
+    });
+
+    // Горячие клавиши
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Backspace' || e.key === 'Delete') {
+        if (mode === 'drawing') { e.preventDefault(); undoPoint(); }
+      }
+      if (e.key.toLowerCase() === 'h') { enterSetHall(); }
+      if (e.key.toLowerCase() === 's') { enterDrawing(); }
+      if (e.key.toLowerCase() === 'f') { btnFinish.click(); }
+      if (e.key.toLowerCase() === 'c') { cancelCurrent(); }
+    });
+
+    // Автовосстановление
+    restore();
+    populateFloorSelect();
+    ensureFloor(appState.activeFloor, DEFAULT_FLOOR_FILES[Number(appState.activeFloor)-1]);
+    // Попробуем сразу подгрузить активный этаж, если есть путь
+    loadFloorImage(appState.activeFloor);
+    updateButtons();
+  </script>
+</body>
+</html>

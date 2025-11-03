@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Онлайн-навигатор по колледжу</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/leaflet.polyline.snakeanim@1.0.0/leaflet.polyline.snakeanim.min.js"></script>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background-image: url('background.jpg');
+      background-size: cover;
+      background-position: center center;
+      background-attachment: fixed;
+      background-repeat: no-repeat;
+      color: #333;
+      line-height: 1.5;
+      padding: 12px;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 18px;
+    }
+
+    h1 {
+      color: #0e2134;
+      margin-bottom: 6px;
+      font-size: 1.8rem;
+    }
+
+    .subtitle {
+      color: #1a2c41;
+      font-size: 1em;
+    }
+
+    .search-box {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+
+    #room-search {
+      flex: 1;
+      min-width: 160px;
+      padding: 12px;
+      font-size: 16px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      transition: border-color 0.3s, box-shadow 0.3s;
+    }
+
+    #room-search:focus {
+      outline: none;
+      border-color: #007bff;
+      box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.2);
+    }
+
+    button {
+      padding: 12px 16px;
+      background: #007bff;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 16px;
+      font-weight: bold;
+      transition: all 0.3s ease;
+      min-width: 90px;
+    }
+
+    button#find-btn {
+      animation: pulse 5s infinite alternate;
+    }
+
+    @keyframes pulse {
+      0% {
+        background-color: #04172a;
+      }
+      100% {
+        background-color: #3a6dc3;
+      }
+    }
+
+    button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+    }
+
+    #map {
+      height: 500px;
+      width: 100%;
+      border: 2px solid #ddd;
+      border-radius: 8px;
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+      margin-bottom: 20px;
+    }
+
+    @media (max-width: 768px) {
+      #map {
+        height: 400px;
+      }
+    }
+
+    .info-panel {
+      background: white;
+      padding: 16px;
+      border-radius: 8px;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+      margin-bottom: 16px;
+      transition: transform 0.3s, box-shadow 0.3s;
+    }
+
+    .info-panel:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 6px 12px rgba(0, 0, 0, 0.12);
+    }
+
+    .info-panel h3 {
+      margin-bottom: 10px;
+      color: #2c3e50;
+      font-size: 1.3rem;
+    }
+
+    .room-tag {
+      background: #e9ecef;
+      padding: 8px 14px;
+      border-radius: 20px;
+      font-weight: bold;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.25s ease;
+      min-height: 36px;
+      font-size: 15px;
+    }
+
+    .room-tag:hover {
+      background: #007bff;
+      color: white;
+      transform: scale(1.03);
+    }
+
+    .room-tag.highlight {
+      background-color: #ffcc00 !important;
+      color: #000 !important;
+      box-shadow: 0 0 0 2px #ff9900;
+    }
+
+    .nearby-list {
+      list-style: none;
+    }
+
+    .nearby-list li::before {
+      content: "📍 ";
+      color: #27ae60;
+    }
+
+    .nearby-list li {
+      margin: 5px 0;
+      font-size: 0.95em;
+    }
+
+    footer {
+      text-align: center;
+      margin-top: 24px;
+      color: #1d2e2f;
+      font-size: 0.85em;
+    }
+
+    .leaflet-control-attribution {
+      display: none !important;
+    }
+
+    .floors-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+      margin-top: 12px;
+    }
+
+    @media (max-width: 600px) {
+      .floors-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .floor-card {
+      background: #f8f9fa;
+      border: 1px solid #e0e0e0;
+      border-radius: 10px;
+      padding: 14px;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+    }
+
+    .floor-card h4 {
+      margin: 0 0 10px 0;
+      color: #2c3e50;
+      font-size: 1.15em;
+      text-align: center;
+      padding-bottom: 6px;
+      border-bottom: 2px solid #007bff;
+    }
+
+    .floor-rooms {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: center;
+    }
+
+    .favorite-star {
+      font-size: 16px;
+      color: #aaa;
+      user-select: none;
+    }
+
+    .favorite-star.active {
+      color: #ffc107;
+    }
+
+    #favorites-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    #favorites-empty {
+      color: #666;
+      display: none;
+    }
+
+    /* Улучшение touch для мобильных */
+    .room-tag,
+    button {
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <header>
+      <h1>Онлайн-навигатор по колледжу</h1>
+      <p class="subtitle">Найдите любой кабинет, постройте маршрут и узнайте, что рядом</p>
+    </header>
+    <div class="search-box">
+      <input type="text" id="room-search" placeholder="Введите номер кабинета (например: 101)" />
+      <button id="find-btn" onclick="searchRoom()">Найти</button>
+      <button id="sound-toggle-btn" onclick="toggleSound()" title="Включить/выключить звук">🔊</button>
+    </div>
+    <div id="map"></div>
+    <div class="info-panel" id="room-info">
+      <h3>Информация о кабинете</h3>
+      <p>Введите номер кабинета или выберите из списка ниже.</p>
+    </div>
+    <div class="info-panel" id="favorites-panel">
+      <h3>Избранные кабинеты</h3>
+      <div id="favorites-list"></div>
+      <p id="favorites-empty">Нет избранных кабинетов</p>
+    </div>
+    <div class="info-panel" id="current-floor-panel">
+      <h3>Где вы находитесь?</h3>
+      <p>Выберите этаж, на котором вы сейчас находитесь:</p>
+      <div class="floors-grid" id="current-floor-buttons"></div>
+    </div>
+    <div class="info-panel" id="available-rooms">
+      <h3>Доступные кабинеты</h3>
+      <p>Выберите кабинет из списка:</p>
+      <div class="floors-grid" id="floors-grid"></div>
+    </div>
+    <div class="info-panel">
+      <h3>Что рядом</h3>
+      <ul class="nearby-list">
+        <li>Столовая За100лье — 51 м</li>
+        <li>Аптека Вита Экспресс — 127 м</li>
+        <li>Канцелярский магазин — 130 м</li>
+        <li>Вкуснолюбов - 102 м</li>
+        <li>Пятерочка - 110 м</li>
+        <li>Прокуратура — рядом с колледжем</li>
+      </ul>
+    </div>
+    <footer>
+      <p>⚠️ Курение запрещено на территории колледжа и вблизи прокуратуры.</p>
+    </footer>
+  </div>
+  <script>
+    let currentFloorId = null;
+    let map = null;
+    let allFloorsData = null;
+
+    // === ИЗБРАННОЕ ===
+    function loadFavorites() {
+      const favs = localStorage.getItem('favorites');
+      return favs ? JSON.parse(favs) : [];
+    }
+
+    function saveFavorites(favs) {
+      localStorage.setItem('favorites', JSON.stringify(favs));
+    }
+
+    function renderFavorites() {
+      const favs = loadFavorites();
+      const listEl = document.getElementById('favorites-list');
+      const emptyEl = document.getElementById('favorites-empty');
+
+      listEl.innerHTML = '';
+      if (favs.length === 0) {
+        emptyEl.style.display = 'block';
+      } else {
+        emptyEl.style.display = 'none';
+        favs.forEach(roomId => {
+          const tag = document.createElement('div');
+          tag.className = 'room-tag';
+          tag.style.background = '#ffc107';
+          tag.style.color = '#000';
+          tag.textContent = roomId;
+          tag.onclick = () => {
+            document.getElementById('room-search').value = roomId;
+            searchRoom();
+          };
+          tag.oncontextmenu = (e) => {
+            e.preventDefault();
+            removeFromFavorites(roomId);
+          };
+          listEl.appendChild(tag);
+        });
+      }
+    }
+
+    function addToFavorites(roomId) {
+      const favs = loadFavorites();
+      if (!favs.includes(roomId)) {
+        favs.push(roomId);
+        saveFavorites(favs);
+        renderFavorites();
+        playClickSound();
+      }
+    }
+
+    function removeFromFavorites(roomId) {
+      let favs = loadFavorites().filter(id => id !== roomId);
+      saveFavorites(favs);
+      renderFavorites();
+      playClickSound();
+    }
+
+    // === ФУНКЦИИ КООРДИНАТ ===
+    function figmaPointToLeaflet([y, x], imgHeight) {
+      return [imgHeight - y, x];
+    }
+
+    function figmaBoundsToLeaflet(bounds, imgHeight) {
+      const [p1, p2] = bounds;
+      const yMin = Math.min(p1[0], p2[0]);
+      const yMax = Math.max(p1[0], p2[0]);
+      const xMin = Math.min(p1[1], p2[1]);
+      const xMax = Math.max(p1[1], p2[1]);
+      return [
+        [imgHeight - yMax, xMin],
+        [imgHeight - yMin, xMax]
+      ];
+    }
+
+    function figmaPolygonToLeaflet(polygon, imgHeight) {
+      return polygon.map(pt => figmaPointToLeaflet(pt, imgHeight));
+    }
+
+    // === ДАННЫЕ ===
+    const roomInfo = {
+      wings: {
+        central: ['101', '102', 'Вахта', 'Гардероб', '201', '202', '217', '218', '301', '302', '310 Актовый зал', '311', '401', '402', '405', 'СтудСовет', 'Балкон'],
+        left: ['103', '104', '105', '106', '107', '108', 'Пожарная Лестница', 'Мужской туалет', 'Женский туалет', '203', '204', '205', '206', '207', '208', 'Мужской туалет2', 'Женский туалет2', 'Пожарная Лестница2', '303', '304', '305', '306', '307', '308', '309', 'Пожарная Лестница3', 'Мужской туалет3', 'Женский туалет3', '403', '404 СпортЗал', 'Женская Раздевалка', 'Мужская Раздевалка']
+      },
+      descriptions: {
+        '101': 'Сразу при входе возле вахты и возле кабинета 102, центральное крыло',
+        '102': 'Сразу при входе возле вахты и возле кабинета 101, центральное крыло',
+        '103': 'Левое крыло',
+        '104': 'Левое крыло',
+        '105': 'Левое крыло',
+        '106': 'Левое крыло',
+        '107': 'Левое крыло',
+        '108': 'Левое крыло',
+        'Вахта': 'При входе, центральное крыло',
+        'Гардероб': 'Центральное крыло',
+        '201': 'Центральное крыло',
+        '202': 'Центральное крыло',
+        '203': 'Левое крыло',
+        '204': 'Левое крыло',
+        '205': 'Левое крыло',
+        '206': 'Левое крыло',
+        '207': 'Левое крыло',
+        '208': 'Левое крыло',
+        '211,212': 'Правое крыло',
+        '213': 'Правое крыло',
+        '214': 'Правое крыло',
+        '215': 'Правое крыло',
+        '216': 'Правое крыло',
+        '217': 'Центральное крыло',
+        '218': 'Центральное крыло',
+        '301': 'Центральное крыло',
+        '302': 'Центральное крыло',
+        '303': 'Левое крыло',
+        '304': 'Левое крыло',
+        '305': 'Левое крыло',
+        '306': 'Левое крыло',
+        '307': 'Левое крыло',
+        '308': 'Левое крыло',
+        '309': 'Левое крыло',
+        '310 Актовый зал': 'Актовый зал, центральное крыло',
+        '311': 'Центральное крыло',
+        '401': 'Центральное крыло',
+        '402': 'Центральное крыло',
+        '403': 'Левое крыло',
+        '404 СпортЗал': 'Спортивный зал, левое крыло',
+        '405': 'Центральное крыло',
+        'СтудСовет': 'Студенческий совет, центральное крыло',
+        'Балкон': 'Балкон, центральное крыло'
+      }
+    };
+
+    function getRoomWing(roomNum) {
+      const roomStr = String(roomNum).trim();
+      const isCentral = roomInfo.wings.central.some(r => roomStr === r || roomStr.includes(r) || r.includes(roomStr));
+      const isLeft = roomInfo.wings.left.some(r => roomStr === r || roomStr.includes(r) || r.includes(roomStr));
+      if (isCentral) return 'Центральное крыло';
+      if (isLeft) return 'Левое крыло';
+      return 'Правое крыло';
+    }
+
+    function getRoomDescription(roomNum) {
+      return roomInfo.descriptions[roomNum] || getRoomWing(roomNum);
+    }
+
+    function getNearbyRooms(roomNum, floorId) {
+      if (!allFloorsData || !allFloorsData.floors[floorId]) return [];
+      const floor = allFloorsData.floors[floorId];
+      const currentRoom = floor.rooms[roomNum];
+      if (!currentRoom || !currentRoom.coords) return [];
+      const [cy, cx] = currentRoom.coords;
+      const sameWing = getRoomWing(roomNum);
+      const nearby = [];
+      for (const [roomId, roomData] of Object.entries(floor.rooms)) {
+        if (roomId === roomNum || !roomData.coords) continue;
+        if (getRoomWing(roomId) !== sameWing) continue;
+        const [ry, rx] = roomData.coords;
+        const distance = Math.sqrt(Math.pow(cy - ry, 2) + Math.pow(cx - rx, 2));
+        nearby.push({ roomId, distance });
+      }
+      nearby.sort((a, b) => a.distance - b.distance);
+      return nearby.slice(0, 3).map(item => item.roomId);
+    }
+
+    // === КАРТА ===
+    function drawInteractiveRooms(floorId, floor) {
+      if (!floor || !floor.rooms) return;
+      const imageHeight = floor.image.height;
+
+      if (window.interactiveRoomLayers) {
+        window.interactiveRoomLayers.forEach(layer => map.removeLayer(layer));
+      }
+      window.interactiveRoomLayers = [];
+
+      for (const [roomId, roomData] of Object.entries(floor.rooms)) {
+        let roomShape = null;
+
+        if (roomData.polygon && roomData.polygon.length >= 3) {
+          const leafletPolygon = figmaPolygonToLeaflet(roomData.polygon, imageHeight);
+          roomShape = L.polygon(leafletPolygon, {
+            color: '#3498db',
+            weight: 1,
+            fillColor: '#3498db',
+            fillOpacity: 0.2,
+            interactive: true
+          });
+        } else if (roomData.bounds) {
+          const leafletBounds = figmaBoundsToLeaflet(roomData.bounds, imageHeight);
+          roomShape = L.rectangle(leafletBounds, {
+            color: '#3498db',
+            weight: 1,
+            fillColor: '#3498db',
+            fillOpacity: 0.2,
+            interactive: true
+          });
+        }
+
+        if (roomShape) {
+          roomShape.on('click', () => {
+            document.getElementById('room-search').value = roomId;
+            searchRoom();
+          });
+          roomShape.bindTooltip(`Кабинет ${roomId}`, { permanent: false, direction: 'center' });
+          roomShape.addTo(map);
+          window.interactiveRoomLayers.push(roomShape);
+        }
+      }
+    }
+
+    // === ЗВУК ===
+    const clickSound = new Audio('click.mp3');
+    clickSound.volume = 0.5;
+    let soundEnabled = localStorage.getItem('soundEnabled') !== 'false';
+
+    function playClickSound() {
+      if (!soundEnabled) return;
+      clickSound.currentTime = 0;
+      clickSound.play().catch(() => { });
+    }
+
+    function toggleSound() {
+      soundEnabled = !soundEnabled;
+      localStorage.setItem('soundEnabled', soundEnabled);
+      updateSoundButton();
+    }
+
+    function updateSoundButton() {
+      const btn = document.getElementById('sound-toggle-btn');
+      if (btn) {
+        btn.textContent = soundEnabled ? '🔊' : '🔇';
+        btn.title = soundEnabled ? 'Выключить звук' : 'Включить звук';
+      }
+    }
+
+    document.addEventListener('click', (e) => {
+      const target = e.target;
+      if (target.tagName === 'BUTTON' || target.closest('button') || target.classList.contains('room-tag')) {
+        playClickSound();
+      }
+    });
+
+    // === ИНИЦИАЛИЗАЦИЯ ===
+    function initMap() {
+      map = L.map('map', {
+        crs: L.CRS.Simple,
+        minZoom: -3,
+        maxZoom: 4
+      });
+      map.fitBounds([[0, 0], [1, 1]]);
+    }
+
+    async function loadAllFloorsData() {
+      try {
+        const response = await fetch('floors_routes.json');
+        if (!response.ok) throw new Error('Файл floors_routes.json не найден');
+        allFloorsData = await response.json();
+
+        const gridEl = document.getElementById('floors-grid');
+        gridEl.innerHTML = '';
+        for (const floorId in allFloorsData.floors) {
+          const floor = allFloorsData.floors[floorId];
+          const floorCard = document.createElement('div');
+          floorCard.className = 'floor-card';
+          const title = document.createElement('h4');
+          title.textContent = `Этаж ${floorId}`;
+          floorCard.appendChild(title);
+
+          const roomsContainer = document.createElement('div');
+          roomsContainer.className = 'floor-rooms';
+
+          const sortedRooms = Object.keys(floor.rooms).sort((a, b) => {
+            const numA = parseInt(a) || 0;
+            const numB = parseInt(b) || 0;
+            if (numA && numB) return numA - numB;
+            return a.localeCompare(b);
+          });
+
+          sortedRooms.forEach(roomNum => {
+            const favs = loadFavorites();
+            const tag = document.createElement('div');
+            tag.className = 'room-tag';
+            const star = document.createElement('span');
+            star.className = 'favorite-star' + (favs.includes(roomNum) ? ' active' : '');
+            star.innerHTML = '★';
+            star.onclick = (e) => {
+              e.stopPropagation();
+              if (favs.includes(roomNum)) {
+                removeFromFavorites(roomNum);
+              } else {
+                addToFavorites(roomNum);
+              }
+            };
+
+            tag.appendChild(document.createTextNode(roomNum));
+            tag.appendChild(star);
+            tag.onclick = () => {
+              document.getElementById('room-search').value = roomNum;
+              searchRoom();
+            };
+            roomsContainer.appendChild(tag);
+          });
+
+          floorCard.appendChild(roomsContainer);
+          gridEl.appendChild(floorCard);
+        }
+
+        const currentFloorGrid = document.getElementById('current-floor-buttons');
+        currentFloorGrid.innerHTML = '';
+        for (const floorId in allFloorsData.floors) {
+          const btn = document.createElement('button');
+          btn.className = 'room-tag';
+          btn.textContent = `Этаж ${floorId}`;
+          btn.style.background = currentFloorId === floorId ? '#28a745' : '#e9ecef';
+          btn.style.color = currentFloorId === floorId ? 'white' : 'black';
+          btn.onclick = () => {
+            currentFloorId = floorId;
+            document.querySelectorAll('#current-floor-buttons .room-tag').forEach(b => {
+              b.style.background = '#e9ecef';
+              b.style.color = 'black';
+            });
+            btn.style.background = '#28a745';
+            btn.style.color = 'white';
+          };
+          currentFloorGrid.appendChild(btn);
+        }
+      } catch (err) {
+        console.error(err);
+        document.getElementById('floors-grid').innerHTML = '<p style="color: red;">Ошибка загрузки данных</p>';
+        document.getElementById('current-floor-buttons').innerHTML = '<p style="color: red;">Не удалось загрузить этажи</p>';
+      }
+    }
+
+    // === ПОИСК ===
+    function searchRoom() {
+      if (!allFloorsData) {
+        alert('Данные ещё не загружены.');
+        return;
+      }
+
+      const roomNum = document.getElementById('room-search').value.trim();
+      if (!roomNum) {
+        alert('Введите номер кабинета');
+        return;
+      }
+
+      let targetFloorId = null;
+      let targetRoomData = null;
+      for (const floorId in allFloorsData.floors) {
+        const rooms = allFloorsData.floors[floorId].rooms;
+        if (rooms[roomNum]) {
+          targetFloorId = floorId;
+          targetRoomData = rooms[roomNum];
+          break;
+        }
+      }
+
+      if (!targetRoomData) {
+        alert(`Кабинет ${roomNum} не найден.`);
+        return;
+      }
+
+      if (!currentFloorId) {
+        alert('Выберите этаж, на котором вы находитесь.');
+        return;
+      }
+
+      map.eachLayer(layer => {
+        if (!(layer instanceof L.TileLayer)) map.removeLayer(layer);
+      });
+
+      const targetFloor = allFloorsData.floors[targetFloorId];
+      const currentFloor = allFloorsData.floors[currentFloorId];
+      const { path: imagePath, width: imageWidth, height: imageHeight } = targetFloor.image;
+      const bounds = [[0, 0], [imageHeight, imageWidth]];
+      L.imageOverlay(imagePath, bounds).addTo(map);
+      map.fitBounds(bounds);
+
+      drawInteractiveRooms(targetFloorId, targetFloor);
+
+      if (window.highlightedRoomLayer) {
+        map.removeLayer(window.highlightedRoomLayer);
+      }
+
+      let roomShape = null;
+      if (targetRoomData.polygon && targetRoomData.polygon.length >= 3) {
+        const leafletPolygon = figmaPolygonToLeaflet(targetRoomData.polygon, imageHeight);
+        roomShape = L.polygon(leafletPolygon, {
+          color: '#ffcc00',
+          weight: 2,
+          fillColor: '#ffcc00',
+          fillOpacity: 0.4,
+          interactive: false
+        });
+      } else if (targetRoomData.bounds) {
+        const leafletBounds = figmaBoundsToLeaflet(targetRoomData.bounds, imageHeight);
+        roomShape = L.rectangle(leafletBounds, {
+          color: '#ffcc00',
+          weight: 2,
+          fillColor: '#ffcc00',
+          fillOpacity: 0.4,
+          interactive: false
+        });
+      } else {
+        const leafletCoords = figmaPointToLeaflet(targetRoomData.coords, imageHeight);
+        roomShape = L.circle(leafletCoords, {
+          color: '#ffcc00',
+          fillColor: '#ffcc00',
+          fillOpacity: 0.4,
+          radius: 15
+        });
+      }
+
+      if (roomShape) {
+        roomShape.addTo(map);
+        window.highlightedRoomLayer = roomShape;
+      }
+
+      const startPoint = currentFloor.hall;
+      const routePoints = [startPoint, ...targetRoomData.route];
+
+      L.circle(startPoint, {
+        color: '#27ae60',
+        fillColor: '#2ecc71',
+        fillOpacity: 0.6,
+        radius: 25
+      }).addTo(map).bindPopup('Холл');
+
+      L.polyline(routePoints, { color: '#007bff', weight: 4 }).addTo(map).snakeIn?.();
+
+      const wing = getRoomWing(roomNum);
+      const description = getRoomDescription(roomNum);
+      const nearbyRooms = getNearbyRooms(roomNum, targetFloorId);
+      let orientirText = description;
+      if (nearbyRooms.length > 0) {
+        orientirText += `. Рядом находятся: ${nearbyRooms.join(', ')}`;
+      }
+
+      let infoHTML = `
+        <h3>Кабинет ${roomNum}</h3>
+        <p><strong>Этаж:</strong> ${targetFloorId}</p>
+        <p><strong>Крыло:</strong> ${wing}</p>
+        <p><strong>Ориентир:</strong> ${orientirText}</p>
+      `;
+
+      if (currentFloorId !== targetFloorId) {
+        infoHTML += `<p><strong>Внимание:</strong> Вы на этаже ${currentFloorId}, кабинет — на этаже ${targetFloorId}.</p>`;
+        infoHTML += `<p>Поднимитесь/спуститесь, затем следуйте от холла.</p>`;
+      } else {
+        infoHTML += `<p>Следуйте маршруту от холла.</p>`;
+      }
+
+      document.getElementById('room-info').innerHTML = infoHTML;
+
+      document.querySelectorAll('.room-tag.highlight').forEach(el => el.classList.remove('highlight'));
+      document.querySelectorAll('.room-tag').forEach(tag => {
+        if (tag.firstChild && tag.firstChild.textContent?.trim() === roomNum) {
+          tag.classList.add('highlight');
+        }
+      });
+    }
+
+    function startSmokingAlert() {
+      const randomMinutes = Math.floor(Math.random() * 8) + 3;
+      setTimeout(() => {
+        alert("⚠️ Курение запрещено!");
+        startSmokingAlert();
+      }, randomMinutes * 60 * 1000);
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      initMap();
+      loadAllFloorsData();
+      renderFavorites();
+      startSmokingAlert();
+      updateSoundButton();
+      document.getElementById('room-search').addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') searchRoom();
+      });
+    });
+  </script>
+</body>
+
+</html>
