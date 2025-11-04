@@ -149,6 +149,7 @@
       transition: all 0.25s ease;
       min-height: 36px;
       font-size: 15px;
+      position: relative;
     }
 
     .room-tag:hover {
@@ -246,6 +247,20 @@
       display: none;
     }
 
+    .room-tag .close-btn {
+      position: absolute;
+      right: 6px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-weight: bold;
+      cursor: pointer;
+      font-size: 18px;
+    }
+
+    .room-tag .close-btn:hover {
+      color: #d00000;
+    }
+
     /* Улучшение touch для мобильных */
     .room-tag,
     button {
@@ -303,6 +318,7 @@
   </div>
   <script>
     let currentFloorId = null;
+    let lastSearchedRoom = null;
     let map = null;
     let allFloorsData = null;
 
@@ -331,15 +347,21 @@
           tag.className = 'room-tag';
           tag.style.background = '#ffc107';
           tag.style.color = '#000';
+          tag.style.paddingRight = '24px';
           tag.textContent = roomId;
           tag.onclick = () => {
             document.getElementById('room-search').value = roomId;
             searchRoom();
           };
-          tag.oncontextmenu = (e) => {
-            e.preventDefault();
+
+          const closeBtn = document.createElement('span');
+          closeBtn.className = 'close-btn';
+          closeBtn.textContent = '×';
+          closeBtn.onclick = (e) => {
+            e.stopPropagation();
             removeFromFavorites(roomId);
           };
+          tag.appendChild(closeBtn);
           listEl.appendChild(tag);
         });
       }
@@ -545,6 +567,115 @@
       }
     });
 
+    // === ОБНОВЛЕНИЕ МАРШРУТА ===
+    function rebuildRoute() {
+      if (!lastSearchedRoom || !currentFloorId || !allFloorsData) return;
+
+      let targetFloorId = null;
+      let targetRoomData = null;
+      for (const floorId in allFloorsData.floors) {
+        const rooms = allFloorsData.floors[floorId].rooms;
+        if (rooms[lastSearchedRoom]) {
+          targetFloorId = floorId;
+          targetRoomData = rooms[lastSearchedRoom];
+          break;
+        }
+      }
+
+      if (!targetRoomData) return;
+
+      const targetFloor = allFloorsData.floors[targetFloorId];
+      const { path: imagePath, width: imageWidth, height: imageHeight } = targetFloor.image;
+      const bounds = [[0, 0], [imageHeight, imageWidth]];
+
+      // Очистка карты, кроме подсветки
+      map.eachLayer(layer => {
+        if (!(layer instanceof L.TileLayer) && layer !== window.highlightedRoomLayer) {
+          map.removeLayer(layer);
+        }
+      });
+
+      // Обновляем фон на этаж кабинета
+      if (window.floorImageLayer) map.removeLayer(window.floorImageLayer);
+      window.floorImageLayer = L.imageOverlay(imagePath, bounds).addTo(map);
+      map.fitBounds(bounds);
+
+      drawInteractiveRooms(targetFloorId, targetFloor);
+
+      // Перерисовываем подсветку
+      if (window.highlightedRoomLayer) map.removeLayer(window.highlightedRoomLayer);
+      let roomShape = null;
+      if (targetRoomData.polygon && targetRoomData.polygon.length >= 3) {
+        const leafletPolygon = figmaPolygonToLeaflet(targetRoomData.polygon, imageHeight);
+        roomShape = L.polygon(leafletPolygon, {
+          color: '#ffcc00',
+          weight: 2,
+          fillColor: '#ffcc00',
+          fillOpacity: 0.4,
+          interactive: false
+        });
+      } else if (targetRoomData.bounds) {
+        const leafletBounds = figmaBoundsToLeaflet(targetRoomData.bounds, imageHeight);
+        roomShape = L.rectangle(leafletBounds, {
+          color: '#ffcc00',
+          weight: 2,
+          fillColor: '#ffcc00',
+          fillOpacity: 0.4,
+          interactive: false
+        });
+      } else if (targetRoomData.coords) {
+        const leafletCoords = figmaPointToLeaflet(targetRoomData.coords, imageHeight);
+        roomShape = L.circle(leafletCoords, {
+          color: '#ffcc00',
+          fillColor: '#ffcc00',
+          fillOpacity: 0.4,
+          radius: 15
+        });
+      }
+      if (roomShape) {
+        roomShape.addTo(map);
+        window.highlightedRoomLayer = roomShape;
+      }
+
+      // Маршрут ОТ ХОЛЛА ЦЕЛЕВОГО ЭТАЖА
+      const startPoint = targetFloor.hall;
+      if (targetRoomData.route) {
+        const routePoints = [startPoint, ...targetRoomData.route];
+        L.polyline(routePoints, { color: '#007bff', weight: 4 }).addTo(map).snakeIn?.();
+        L.circle(startPoint, {
+          color: '#27ae60',
+          fillColor: '#2ecc71',
+          fillOpacity: 0.6,
+          radius: 25
+        }).addTo(map).bindPopup('Холл');
+      }
+
+      // Обновляем инструкцию
+      const wing = getRoomWing(lastSearchedRoom);
+      const description = getRoomDescription(lastSearchedRoom);
+      const nearbyRooms = getNearbyRooms(lastSearchedRoom, targetFloorId);
+      let orientirText = description;
+      if (nearbyRooms.length > 0) {
+        orientirText += `. Рядом находятся: ${nearbyRooms.join(', ')}`;
+      }
+
+      let infoHTML = `
+        <h3>Кабинет ${lastSearchedRoom}</h3>
+        <p><strong>Этаж:</strong> ${targetFloorId}</p>
+        <p><strong>Крыло:</strong> ${wing}</p>
+        <p><strong>Ориентир:</strong> ${orientirText}</p>
+      `;
+
+      if (currentFloorId !== targetFloorId) {
+        infoHTML += `<p><strong>Внимание:</strong> Вы находитесь на этаже ${currentFloorId}, а кабинет — на этаже ${targetFloorId}.</p>`;
+        infoHTML += `<p>Сначала поднимитесь/спуститесь на ${targetFloorId} этаж, затем следуйте маршруту от холла.</p>`;
+      } else {
+        infoHTML += `<p>Следуйте маршруту от холла.</p>`;
+      }
+
+      document.getElementById('room-info').innerHTML = infoHTML;
+    }
+
     // === ИНИЦИАЛИЗАЦИЯ ===
     function initMap() {
       map = L.map('map', {
@@ -626,6 +757,10 @@
             });
             btn.style.background = '#28a745';
             btn.style.color = 'white';
+
+            if (lastSearchedRoom) {
+              rebuildRoute();
+            }
           };
           currentFloorGrid.appendChild(btn);
         }
@@ -670,16 +805,18 @@
         return;
       }
 
+      lastSearchedRoom = roomNum;
+
       map.eachLayer(layer => {
         if (!(layer instanceof L.TileLayer)) map.removeLayer(layer);
       });
 
       const targetFloor = allFloorsData.floors[targetFloorId];
-      const currentFloor = allFloorsData.floors[currentFloorId];
       const { path: imagePath, width: imageWidth, height: imageHeight } = targetFloor.image;
       const bounds = [[0, 0], [imageHeight, imageWidth]];
       L.imageOverlay(imagePath, bounds).addTo(map);
       map.fitBounds(bounds);
+      window.floorImageLayer = L.imageOverlay(imagePath, bounds);
 
       drawInteractiveRooms(targetFloorId, targetFloor);
 
@@ -706,7 +843,7 @@
           fillOpacity: 0.4,
           interactive: false
         });
-      } else {
+      } else if (targetRoomData.coords) {
         const leafletCoords = figmaPointToLeaflet(targetRoomData.coords, imageHeight);
         roomShape = L.circle(leafletCoords, {
           color: '#ffcc00',
@@ -721,17 +858,18 @@
         window.highlightedRoomLayer = roomShape;
       }
 
-      const startPoint = currentFloor.hall;
-      const routePoints = [startPoint, ...targetRoomData.route];
-
-      L.circle(startPoint, {
-        color: '#27ae60',
-        fillColor: '#2ecc71',
-        fillOpacity: 0.6,
-        radius: 25
-      }).addTo(map).bindPopup('Холл');
-
-      L.polyline(routePoints, { color: '#007bff', weight: 4 }).addTo(map).snakeIn?.();
+      // Маршрут от холла ЦЕЛЕВОГО этажа
+      const startPoint = targetFloor.hall;
+      if (targetRoomData.route) {
+        const routePoints = [startPoint, ...targetRoomData.route];
+        L.polyline(routePoints, { color: '#007bff', weight: 4 }).addTo(map).snakeIn?.();
+        L.circle(startPoint, {
+          color: '#27ae60',
+          fillColor: '#2ecc71',
+          fillOpacity: 0.6,
+          radius: 25
+        }).addTo(map).bindPopup('Холл');
+      }
 
       const wing = getRoomWing(roomNum);
       const description = getRoomDescription(roomNum);
@@ -749,8 +887,8 @@
       `;
 
       if (currentFloorId !== targetFloorId) {
-        infoHTML += `<p><strong>Внимание:</strong> Вы на этаже ${currentFloorId}, кабинет — на этаже ${targetFloorId}.</p>`;
-        infoHTML += `<p>Поднимитесь/спуститесь, затем следуйте от холла.</p>`;
+        infoHTML += `<p><strong>Внимание:</strong> Вы находитесь на этаже ${currentFloorId}, а кабинет — на этаже ${targetFloorId}.</p>`;
+        infoHTML += `<p>Сначала поднимитесь/спуститесь на ${targetFloorId} этаж, затем следуйте маршруту от холла.</p>`;
       } else {
         infoHTML += `<p>Следуйте маршруту от холла.</p>`;
       }
